@@ -93,3 +93,7 @@ This project is not affiliated with, endorsed by, or sponsored by Ansys. It does
 ## License
 
 This project is licensed under the MIT License. See [LICENSE](LICENSE).
+
+## Author
+
+James Huang - [@jameshuang0430](https://github.com/jameshuang0430)
