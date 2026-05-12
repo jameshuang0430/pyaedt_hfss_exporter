@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+
+# Local HFSS/AEDT project data and generated exports.
+hfss_exports/
+hfss_export_*/
+*.aedt
+*.aedb/
+*.aedtresults/
+*.lock
