@@ -89,3 +89,7 @@ hfss_exports/
 ## Notes
 
 This project is not affiliated with, endorsed by, or sponsored by Ansys. It does not include or replace Ansys Electronics Desktop, HFSS, or any required license.
+
+## License
+
+This project is licensed under the MIT License. See [LICENSE](LICENSE).
