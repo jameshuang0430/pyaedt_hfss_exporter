@@ -8,18 +8,18 @@ The tool attaches to a running Ansys Electronics Desktop session by default. You
 
 - Windows with Ansys Electronics Desktop / HFSS 2022 R1 or later
 - A valid AEDT/HFSS license
-- Python 3.10 or newer
+- Python 3.10 through 3.13. Python 3.14 is not currently supported because `pythonnet` does not support it.
 
 ## Easy Setup for Windows
 
 For non-technical users:
 
-1. Install Python 3.10 or newer from <https://www.python.org/downloads/windows/>.
-   During installation, select **Add python.exe to PATH**.
-2. Double-click `setup.bat`.
+1. Double-click `setup.bat`.
+   If Python 3.10 through 3.13 is not found, setup can install Python 3.13 automatically with `winget`.
+2. If setup asks to install Python, approve the prompt and let it finish.
 3. Open your HFSS project in Ansys Electronics Desktop, then double-click `run_exporter.bat`.
 
-`setup.bat` creates a local `.venv` folder and installs the Python dependencies from `requirements.txt`.
+`setup.bat` creates a local `.venv` folder and installs the Python dependencies from `requirements.txt`. Python 3.10 is preferred when available, but Python 3.11, 3.12, and 3.13 are also accepted. If `winget` is not available, install a supported Python version manually from <https://www.python.org/downloads/windows/>.
 
 ## Manual Setup
 
