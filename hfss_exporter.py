@@ -12,20 +12,20 @@ Output order (recommended reading order):
 
 Notes:
 - Runs from CPython with PyAEDT rather than the in-editor IronPython environment.
-- Tries to attach to an existing AEDT session first, then falls back to opening a
-  selected .aedt project.
+- Tries to attach to an existing AEDT session by default. Use --project to open
+  a .aedt project explicitly.
 - Keeps the original export structure and role-classification heuristics.
 """
 
 from datetime import datetime
 import argparse
+import importlib.util
 import json
 import os
 import re
-import tkinter as tk
-from tkinter import filedialog
 
 import psutil
+from ansys.aedt.core import Desktop
 from ansys.aedt.core import Hfss
 from ansys.aedt.core.generic.general_methods import active_sessions
 from ansys.aedt.core.generic.settings import settings as pyaedt_settings
@@ -81,7 +81,7 @@ def parse_args():
     parser.add_argument(
         "--no-gui",
         action="store_true",
-        help="Do not open a Tk file picker if no usable running AEDT session is found."
+        help="Deprecated compatibility option. The file picker has been removed."
     )
     return parser.parse_args()
 
@@ -110,19 +110,13 @@ def release_hfss_session(hfss, context):
     )
 
 
-def select_project_file(no_gui=False):
-    if no_gui:
-        add_warning("No project path was provided and GUI project selection is disabled.")
-        return None
-
-    root = tk.Tk()
-    root.withdraw()
-    file_path = filedialog.askopenfilename(
-        title="Select HFSS Project (.aedt)",
-        filetypes=[("AEDT files", "*.aedt")]
+def release_desktop_session(desktop, context):
+    if desktop is None:
+        return
+    safe_get(
+        lambda: desktop.release_desktop(close_projects=False, close_on_exit=False),
+        context=context
     )
-    root.destroy()
-    return file_path
 
 
 def is_temp_project_name(name):
@@ -138,6 +132,29 @@ def reset_pyaedt_connection_preference():
         pass
 
 
+def has_com_attach_support():
+    has_pythonnet = importlib.util.find_spec("pythonnet") is not None or importlib.util.find_spec("clr") is not None
+    has_pythoncom = importlib.util.find_spec("pythoncom") is not None
+    return has_pythonnet and has_pythoncom
+
+
+def can_attempt_pid_attach(pid, detected_sessions):
+    session_port = detected_sessions.get(pid)
+    if session_port != -1 and session_port is not None:
+        return True
+
+    if has_com_attach_support():
+        return True
+
+    print(
+        "Skipping PID %s because it is a COM AEDT session and COM Python dependencies are not installed."
+        % pid
+    )
+    print("Run setup.bat again, or install pythonnet and pywin32 in .venv, then rerun the exporter.")
+    add_warning("Cannot attach to COM AEDT PID %s because pythonnet/pywin32 is not installed." % pid)
+    return False
+
+
 def count_modeler_objects(hfss):
     oeditor = safe_get(lambda: hfss.modeler.oeditor, None)
     if oeditor is None:
@@ -149,6 +166,70 @@ def count_modeler_objects(hfss):
         for obj_name in objs:
             names.add(to_str(obj_name))
     return len(names)
+
+
+def get_design_list_from_desktop(desktop, project_name):
+    design_list = safe_get(lambda: list(desktop.design_list(project_name)), None)
+    if design_list is not None:
+        return design_list
+
+    project = safe_get(lambda: desktop.odesktop.SetActiveProject(project_name), None)
+    if project is None:
+        return []
+
+    raw_designs = safe_get(lambda: list(project.GetTopDesignList()), [])
+    design_names = []
+    for design in raw_designs:
+        design_text = to_str(design)
+        if ";" in design_text:
+            design_text = design_text.split(";")[-1]
+        if design_text:
+            design_names.append(design_text)
+    return design_names
+
+
+def inspect_aedt_session(pid, session_port=None):
+    desktop = None
+    try:
+        reset_pyaedt_connection_preference()
+        if session_port not in (None, -1):
+            desktop = Desktop(new_desktop=False, port=session_port, close_on_exit=False)
+        else:
+            desktop = Desktop(new_desktop=False, aedt_process_id=pid, close_on_exit=False)
+
+        project_list = safe_get(lambda: list(desktop.odesktop.GetProjectList()), [])
+        if not project_list:
+            print("Skipping PID %s because no project is open in that AEDT session." % pid)
+            return None
+
+        active_project = safe_get(lambda: desktop.odesktop.GetActiveProject(), None)
+        project_name = safe_get(lambda: active_project.GetName(), None) if active_project is not None else None
+        if project_name not in project_list:
+            project_name = project_list[0]
+
+        design_list = get_design_list_from_desktop(desktop, project_name)
+        if not design_list:
+            print("Skipping PID %s because project %s has no designs." % (pid, project_name))
+            return None
+
+        active_design = safe_get(lambda: active_project.GetActiveDesign(), None) if active_project is not None else None
+        design_name = safe_get(lambda: active_design.GetName(), None) if active_design is not None else None
+        if design_name not in design_list:
+            design_name = design_list[0]
+
+        return {
+            "project": project_name,
+            "design": design_name,
+            "project_count": len(project_list),
+            "design_count": len(design_list),
+        }
+    except Exception as exc:
+        print("Session inspection failed:", exc)
+        add_warning("Inspect failed for PID %s: %s: %s" % (pid, type(exc).__name__, to_str(exc)))
+        return None
+    finally:
+        release_desktop_session(desktop, "release AEDT session inspection")
+        reset_pyaedt_connection_preference()
 
 
 def find_running_aedt_pids():
@@ -184,17 +265,36 @@ def find_running_aedt_pids():
 
 
 def try_attach_existing_aedt(attach_pid=None):
+    detected_sessions = safe_get(lambda: active_sessions(), {}, context="read active AEDT sessions") or {}
     pids = [attach_pid] if attach_pid else find_running_aedt_pids()
     if not pids:
         print("No running AEDT/HFSS session found.")
         return None
 
     print("Detected AEDT PID(s):", pids)
+    if attach_pid is None and not has_com_attach_support():
+        com_pids = [pid for pid, port in detected_sessions.items() if port == -1]
+        if com_pids:
+            print("Detected COM AEDT session(s):", sorted(com_pids))
+            print("COM Python dependencies are not installed, so PyAEDT cannot attach to those GUI sessions.")
+            print("Run setup.bat again, or install pythonnet and pywin32 in .venv, then rerun the exporter.")
+            add_warning("Cannot attach to COM AEDT session(s) because pythonnet/pywin32 is not installed.")
+            return None
+
     for pid in pids:
         print("Trying PID =", pid)
+        if not can_attempt_pid_attach(pid, detected_sessions):
+            continue
+
+        session_info = inspect_aedt_session(pid, detected_sessions.get(pid))
+        if session_info is None:
+            continue
+
         try:
             reset_pyaedt_connection_preference()
             hfss = Hfss(
+                project=session_info["project"],
+                design=session_info["design"],
                 new_desktop=False,
                 aedt_process_id=pid,
                 close_on_exit=False
@@ -303,16 +403,11 @@ def choose_design_from_project(project_path, design_selector=None):
 
 
 def open_project_mode(project_path=None, design_selector=None, no_gui=False):
-    if project_path:
-        print("\nOpening .aedt project...")
-    else:
-        print("\nOpening .aedt project...")
-        project_path = select_project_file(no_gui=no_gui)
-
     if not project_path:
-        print("No .aedt file selected.")
+        print("No .aedt project path was provided.")
         return None
 
+    print("\nOpening .aedt project...")
     print("Selected project:")
     print(project_path)
     return choose_design_from_project(project_path, design_selector)
@@ -326,7 +421,10 @@ def get_hfss_session(args):
     if hfss is not None:
         return hfss
 
-    return open_project_mode(design_selector=args.design, no_gui=args.no_gui)
+    print("No usable running AEDT/HFSS session found.")
+    print("Open the HFSS project in AEDT and run this script again, or pass --project to open a project explicitly.")
+    add_warning("No usable running AEDT/HFSS session found; file picker fallback is disabled.")
+    return None
 
 
 # =========================================================

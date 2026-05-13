@@ -14,7 +14,7 @@ if not exist ".venv\Scripts\python.exe" (
 echo.
 echo === PyAEDT HFSS Exporter ===
 echo.
-echo Tip: Open your HFSS project before running this tool, or choose a .aedt file when prompted.
+echo Tip: Open your HFSS project before running this tool. To open a file explicitly, pass --project.
 echo.
 
 ".venv\Scripts\python.exe" "%~dp0hfss_exporter.py" %*

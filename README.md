@@ -2,7 +2,7 @@
 
 Export HFSS/AEDT design metadata with PyAEDT into readable text files and structured JSON.
 
-The tool attaches to a running Ansys Electronics Desktop session when possible, or opens a selected `.aedt` project. Each run writes a timestamped export folder under the project-local `hfss_exports/` directory by default.
+The tool attaches to a running Ansys Electronics Desktop session by default. You can also open a `.aedt` project explicitly with `--project`. Each run writes a timestamped export folder under the project-local `hfss_exports/` directory by default.
 
 ## Requirements
 
@@ -19,7 +19,7 @@ For non-technical users:
 2. Double-click `setup.bat`.
 3. Open your HFSS project in Ansys Electronics Desktop, then double-click `run_exporter.bat`.
 
-`setup.bat` creates a local `.venv` folder and installs PyAEDT and psutil from `requirements.txt`.
+`setup.bat` creates a local `.venv` folder and installs the Python dependencies from `requirements.txt`.
 
 ## Manual Setup
 
@@ -48,6 +48,8 @@ Attach to an existing AEDT/HFSS session:
 ```powershell
 python .\hfss_exporter.py
 ```
+
+If no usable AEDT/HFSS session is found, the script stops instead of opening a file picker.
 
 Open a specific project:
 
