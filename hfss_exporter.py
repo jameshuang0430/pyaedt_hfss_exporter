@@ -27,6 +27,8 @@ from tkinter import filedialog
 
 import psutil
 from ansys.aedt.core import Hfss
+from ansys.aedt.core.generic.general_methods import active_sessions
+from ansys.aedt.core.generic.settings import settings as pyaedt_settings
 
 
 # =========================================================
@@ -129,8 +131,30 @@ def is_temp_project_name(name):
     return re.fullmatch(r"Project\d+", str(name)) is not None
 
 
+def reset_pyaedt_connection_preference():
+    try:
+        pyaedt_settings.use_grpc_api = None
+    except Exception:
+        pass
+
+
+def count_modeler_objects(hfss):
+    oeditor = safe_get(lambda: hfss.modeler.oeditor, None)
+    if oeditor is None:
+        return 0
+
+    names = set()
+    for group in ["Solids", "Sheets", "Lines", "Unclassified", "Model", "NonModel"]:
+        objs = safe_get(lambda group=group: list(oeditor.GetObjectsInGroup(group)), [])
+        for obj_name in objs:
+            names.add(to_str(obj_name))
+    return len(names)
+
+
 def find_running_aedt_pids():
-    pids = []
+    detected_sessions = safe_get(lambda: active_sessions(), {}, context="read active AEDT sessions") or {}
+    pids = set(detected_sessions)
+
     for proc in psutil.process_iter(["pid", "name"]):
         try:
             name = proc.info["name"]
@@ -142,10 +166,21 @@ def find_running_aedt_pids():
                 or "electronicsdesktop" in nl
                 or ("ansys" in nl and "edt" in nl)
             ):
-                pids.append(proc.info["pid"])
+                pids.add(proc.info["pid"])
         except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
             continue
-    return sorted(set(pids))
+
+    def pid_sort_key(pid):
+        session_port = detected_sessions.get(pid)
+        if session_port == -1:
+            priority = 0
+        elif session_port is None:
+            priority = 1
+        else:
+            priority = 2
+        return (priority, -pid)
+
+    return sorted(pids, key=pid_sort_key)
 
 
 def try_attach_existing_aedt(attach_pid=None):
@@ -155,9 +190,10 @@ def try_attach_existing_aedt(attach_pid=None):
         return None
 
     print("Detected AEDT PID(s):", pids)
-    for pid in reversed(pids):
+    for pid in pids:
         print("Trying PID =", pid)
         try:
+            reset_pyaedt_connection_preference()
             hfss = Hfss(
                 new_desktop=False,
                 aedt_process_id=pid,
@@ -171,15 +207,20 @@ def try_attach_existing_aedt(attach_pid=None):
             print("Project :", project_name)
             print("Design  :", design_name)
 
-            if is_temp_project_name(project_name):
-                print("Skipping temporary AEDT session without a real project.")
+            modeler_object_count = count_modeler_objects(hfss)
+            print("Modeler objects:", modeler_object_count)
+
+            if is_temp_project_name(project_name) and modeler_object_count == 0:
+                print("Skipping temporary AEDT session without modeler objects.")
                 release_hfss_session(hfss, "release temporary AEDT session")
+                reset_pyaedt_connection_preference()
                 continue
 
             return hfss
         except Exception as exc:
             print("Attach failed:", exc)
             add_warning("Attach failed for PID %s: %s: %s" % (pid, type(exc).__name__, to_str(exc)))
+            reset_pyaedt_connection_preference()
 
     print("Could not attach to a usable AEDT session.")
     return None
@@ -282,9 +323,10 @@ def get_hfss_session(args):
         return open_project_mode(args.project, args.design, args.no_gui)
 
     hfss = try_attach_existing_aedt(args.attach_pid)
-    if hfss is None:
-        hfss = open_project_mode(design_selector=args.design, no_gui=args.no_gui)
-    return hfss
+    if hfss is not None:
+        return hfss
+
+    return open_project_mode(design_selector=args.design, no_gui=args.no_gui)
 
 
 # =========================================================
